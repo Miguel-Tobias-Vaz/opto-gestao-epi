@@ -1,0 +1,1 @@
+export function Badge({ children, tone = 'neutral' }: { children: React.ReactNode; tone?: 'success' | 'warning' | 'danger' | 'info' | 'neutral' }) { return <span className={`badge ${tone}`}>{children}</span>; }
