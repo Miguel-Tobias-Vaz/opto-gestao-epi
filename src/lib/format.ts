@@ -33,6 +33,7 @@ export function firstName(name: string) {
 
 const ROLE_LABELS: Record<string, string> = {
   Administração: 'Administração',
+  Gerente: 'Gerente',
   Técnico: 'Técnico de segurança',
   Visualizador: 'Visualizador',
 };

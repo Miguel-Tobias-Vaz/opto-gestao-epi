@@ -2,7 +2,7 @@ import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { supabase, supabaseAuth } from './supabase.ts';
 import { mapEmployee, mapEpi, mapInventory, mapMovement, mapUser, publicUser, throwDb } from './db.ts';
-import { canAdmin, canWrite, clearAuthCookies, loadProfile, requireAuth, requireRole, setAuthCookies } from './auth.ts';
+import { canAssignRole, canManageProfile, canManageUsers, canWrite, clearAuthCookies, loadProfile, requireAuth, requireRole, setAuthCookies } from './auth.ts';
 import {
   HttpError,
   asyncHandler,
@@ -135,9 +135,11 @@ router.post(
 router.get(
   '/users',
   requireAuth,
-  requireRole(...canAdmin),
-  asyncHandler(async (_req, res) => {
-    const { data, error } = await supabase.from('profiles').select('*').order('name');
+  requireRole(...canManageUsers),
+  asyncHandler(async (req, res) => {
+    let query = supabase.from('profiles').select('*').order('name');
+    if (req.user!.role === 'Gerente') query = query.eq('role', 'Técnico');
+    const { data, error } = await query;
     throwDb(error);
     res.json(((data ?? []) as ProfileRow[]).map(publicUser));
   }),
@@ -146,9 +148,12 @@ router.get(
 router.post(
   '/users',
   requireAuth,
-  requireRole(...canAdmin),
+  requireRole(...canManageUsers),
   asyncHandler(async (req, res) => {
     const body = createUserSchema.parse(req.body);
+    if (!canAssignRole(req.user!.role, body.role)) {
+      throw new HttpError(403, 'O gerente só cadastra técnico de segurança. Quem adiciona o gerente é o administrador.');
+    }
     const created = await supabase.auth.admin.createUser({
       email: body.email,
       password: body.password,
@@ -181,13 +186,20 @@ router.post(
 router.patch(
   '/users/:id',
   requireAuth,
-  requireRole(...canAdmin),
+  requireRole(...canManageUsers),
   asyncHandler(async (req, res) => {
     const body = updateUserSchema.parse(req.body);
     const current = await supabase.from('profiles').select('*').eq('id', req.params.id).maybeSingle();
     throwDb(current.error);
     if (!current.data) throw new HttpError(404, 'Usuário não encontrado.');
     const row = current.data as ProfileRow;
+
+    if (!canManageProfile(req.user!.role, row.role)) {
+      throw new HttpError(403, 'O gerente só gerencia técnicos de segurança.');
+    }
+    if (body.role && !canAssignRole(req.user!.role, body.role)) {
+      throw new HttpError(403, 'O gerente não pode alterar o perfil para este acesso.');
+    }
 
     if (body.active === false && row.id === req.user!.id) {
       throw new HttpError(400, 'Você não pode desativar o próprio acesso.');

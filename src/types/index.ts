@@ -1,4 +1,4 @@
-export type Role = 'Administração' | 'Técnico' | 'Visualizador';
+export type Role = 'Administração' | 'Gerente' | 'Técnico' | 'Visualizador';
 export type EmployeeStatus = 'Ativo' | 'Afastado' | 'Desligado';
 export type MovementType = 'Entrada' | 'Entrega' | 'Devolução' | 'Perda' | 'Quebra' | 'Ajuste';
 

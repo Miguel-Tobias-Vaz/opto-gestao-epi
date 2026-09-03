@@ -121,5 +121,16 @@ export function requireRole(...roles: Role[]) {
   };
 }
 
-export const canWrite: Role[] = ['Administração', 'Técnico'];
+export const canWrite: Role[] = ['Administração', 'Gerente', 'Técnico'];
 export const canAdmin: Role[] = ['Administração'];
+export const canManageUsers: Role[] = ['Administração', 'Gerente'];
+
+export function canAssignRole(actor: Role, role: Role) {
+  if (actor === 'Administração') return true;
+  return actor === 'Gerente' && role === 'Técnico';
+}
+
+export function canManageProfile(actor: Role, targetRole: Role) {
+  if (actor === 'Administração') return true;
+  return actor === 'Gerente' && targetRole === 'Técnico';
+}

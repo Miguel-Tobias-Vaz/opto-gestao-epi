@@ -42,7 +42,7 @@ import type { AuthUser, DashboardData, Employee, EmployeeStatus, Epi, InventoryS
 
 type Page = 'Dashboard' | 'Funcionários' | 'EPIs' | 'Estoque' | 'Movimentações' | 'Inventário' | 'Relatórios' | 'Contratos' | 'Usuários' | 'Configurações';
 
-const nav: { label: Page; icon: typeof LayoutDashboard; adminOnly?: boolean }[] = [
+const nav: { label: Page; icon: typeof LayoutDashboard; roles?: Role[] }[] = [
   { label: 'Dashboard', icon: LayoutDashboard },
   { label: 'Funcionários', icon: Users },
   { label: 'EPIs', icon: HardHat },
@@ -51,18 +51,19 @@ const nav: { label: Page; icon: typeof LayoutDashboard; adminOnly?: boolean }[] 
   { label: 'Inventário', icon: ClipboardCheck },
   { label: 'Contratos', icon: FileSearch },
   { label: 'Relatórios', icon: BarChart3 },
-  { label: 'Usuários', icon: UserCog, adminOnly: true },
+  { label: 'Usuários', icon: UserCog, roles: ['Administração', 'Gerente'] },
   { label: 'Configurações', icon: Settings },
 ];
 
 const emptyUserForm = { name: '', email: '', password: '', role: 'Técnico' as Role };
 
-function RoleSelect({ value, onChange }: { value: Role; onChange: (role: Role) => void }) {
+function RoleSelect({ value, onChange, allowed }: { value: Role; onChange: (role: Role) => void; allowed: Role[] }) {
   return (
     <select value={value} onChange={(event) => onChange(event.target.value as Role)}>
-      <option value="Administração">Administração</option>
-      <option value="Técnico">Técnico de segurança</option>
-      <option value="Visualizador">Visualizador</option>
+      {allowed.includes('Administração') && <option value="Administração">Administração</option>}
+      {allowed.includes('Gerente') && <option value="Gerente">Gerente</option>}
+      {allowed.includes('Técnico') && <option value="Técnico">Técnico de segurança</option>}
+      {allowed.includes('Visualizador') && <option value="Visualizador">Visualizador</option>}
     </select>
   );
 }
@@ -299,7 +300,7 @@ export default function App() {
           </button>
         </div>
         <nav>
-          {nav.filter((item) => !item.adminOnly || user.role === 'Administração').map(({ label, icon: Icon }) => (
+          {nav.filter((item) => !item.roles || item.roles.includes(user.role)).map(({ label, icon: Icon }) => (
             <button key={label} className={page === label ? 'nav-item active' : 'nav-item'} onClick={() => openPage(label)} title={collapsed ? label : undefined}>
               <Icon size={18} />
               {!collapsed && <span>{label}</span>}
@@ -990,6 +991,8 @@ function Contracts() {
 
 function UsersPage({ user, onToast }: { user: AuthUser; onToast: (message: string) => void }) {
   const isAdmin = user.role === 'Administração';
+  const canManage = user.role === 'Administração' || user.role === 'Gerente';
+  const assignable: Role[] = isAdmin ? ['Administração', 'Gerente', 'Técnico', 'Visualizador'] : ['Técnico'];
   const [users, setUsers] = useState<SystemUser[]>([]);
   const [creating, setCreating] = useState(emptyUserForm);
   const [editing, setEditing] = useState<SystemUser | null>(null);
@@ -1001,13 +1004,15 @@ function UsersPage({ user, onToast }: { user: AuthUser; onToast: (message: strin
   };
 
   useEffect(() => {
-    if (!isAdmin) return;
+    if (!canManage) return;
     void loadUsers().catch((error) => onToast(error instanceof Error ? error.message : 'Não foi possível carregar os usuários.'));
-  }, [isAdmin, onToast]);
+  }, [canManage, onToast]);
 
-  if (!isAdmin) {
-    return <p className="muted">Somente a Administração gerencia usuários do sistema.</p>;
+  if (!canManage) {
+    return <p className="muted">Somente administrador e gerente gerenciam usuários do sistema.</p>;
   }
+
+  const canEdit = (item: SystemUser) => isAdmin || item.role === 'Técnico';
 
   const openEdit = (item: SystemUser) => {
     setEditing(item);
@@ -1029,8 +1034,12 @@ function UsersPage({ user, onToast }: { user: AuthUser; onToast: (message: strin
       <div className="page-intro">
         <div>
           <p className="kicker">ACESSO</p>
-          <h2>Usuários do sistema</h2>
-          <p>Sua conta já é Administração. Crie o técnico de segurança e os demais acessos por aqui.</p>
+          <h2>{isAdmin ? 'Usuários do sistema' : 'Técnicos de segurança'}</h2>
+          <p>
+            {isAdmin
+              ? 'Cadastre o gerente. O gerente vê a operação e adiciona os técnicos de segurança.'
+              : 'Visão dos técnicos de segurança. Cadastre novos técnicos por aqui.'}
+          </p>
         </div>
       </div>
       <div className="settings-grid">
@@ -1042,13 +1051,14 @@ function UsersPage({ user, onToast }: { user: AuthUser; onToast: (message: strin
             </div>
           </div>
           <div className="role-legend">
-            <article><strong>Administração</strong><span>Cria, edita, ativa e desativa usuários. Opera todo o sistema.</span></article>
+            <article><strong>Administração</strong><span>Cadastra o gerente e qualquer usuário. Opera todo o sistema.</span></article>
+            <article><strong>Gerente</strong><span>Vê a operação completa e todos os técnicos. Cadastra, edita e ativa técnicos.</span></article>
             <article><strong>Técnico de segurança</strong><span>Opera EPIs, estoque, entregas, movimentações e inventário.</span></article>
             <article><strong>Visualizador</strong><span>Consulta dashboards e listas, sem alterar dados.</span></article>
           </div>
         </section>
         <section className="panel">
-          <div className="panel-heading"><div><p className="eyebrow">NOVO ACESSO</p><h3>Criar usuário</h3></div></div>
+          <div className="panel-heading"><div><p className="eyebrow">NOVO ACESSO</p><h3>{isAdmin ? 'Criar usuário' : 'Adicionar técnico'}</h3></div></div>
           <form
             className="form-grid"
             onSubmit={async (event) => {
@@ -1072,13 +1082,13 @@ function UsersPage({ user, onToast }: { user: AuthUser; onToast: (message: strin
             </div>
             <div className="form-two">
               <label>Senha inicial<input type="password" value={creating.password} onChange={(event) => setCreating({ ...creating, password: event.target.value })} minLength={8} required /></label>
-              <label>Perfil<RoleSelect value={creating.role} onChange={(role) => setCreating({ ...creating, role })} /></label>
+              <label>Perfil<RoleSelect value={creating.role} onChange={(role) => setCreating({ ...creating, role })} allowed={assignable} /></label>
             </div>
-            <div className="form-actions"><button className="primary-button" disabled={busy}>{busy ? 'Criando...' : 'Criar usuário'}</button></div>
+            <div className="form-actions"><button className="primary-button" disabled={busy}>{busy ? 'Criando...' : isAdmin ? 'Criar usuário' : 'Adicionar técnico'}</button></div>
           </form>
         </section>
         <section className="panel table-panel">
-          <div className="panel-heading compact"><div><p className="eyebrow">CADASTRO</p><h3>Quem tem acesso</h3></div></div>
+          <div className="panel-heading compact"><div><p className="eyebrow">CADASTRO</p><h3>{isAdmin ? 'Quem tem acesso' : 'Técnicos cadastrados'}</h3></div></div>
           <Table
             headers={['Usuário', 'E-mail', 'Perfil', 'Status', '']}
             rows={users.map((item) => [
@@ -1093,8 +1103,8 @@ function UsersPage({ user, onToast }: { user: AuthUser; onToast: (message: strin
               roleLabel(item.role),
               <Badge key={`${item.id}-active`} tone={item.active ? 'success' : 'warning'}>{item.active ? 'Ativo' : 'Inativo'}</Badge>,
               <div className="row-actions" key={`${item.id}-actions`}>
-                <button className="small-action" type="button" onClick={() => openEdit(item)}>Editar</button>
-                {item.id !== user.id && (
+                {canEdit(item) && <button className="small-action" type="button" onClick={() => openEdit(item)}>Editar</button>}
+                {item.id !== user.id && canEdit(item) && (
                   <button className="small-action" type="button" onClick={() => void toggleActive(item)}>
                     {item.active ? 'Desativar' : 'Ativar'}
                   </button>
@@ -1135,7 +1145,7 @@ function UsersPage({ user, onToast }: { user: AuthUser; onToast: (message: strin
             </div>
             <div className="form-two">
               <label>Nova senha (opcional)<input type="password" value={editForm.password} onChange={(event) => setEditForm({ ...editForm, password: event.target.value })} minLength={editForm.password ? 8 : undefined} placeholder="Deixe em branco para manter" /></label>
-              <label>Perfil<RoleSelect value={editForm.role} onChange={(role) => setEditForm({ ...editForm, role })} /></label>
+              <label>Perfil<RoleSelect value={editForm.role} onChange={(role) => setEditForm({ ...editForm, role })} allowed={isAdmin ? assignable : ['Técnico']} /></label>
             </div>
             {editing.id !== user.id && (
               <label>
@@ -1187,7 +1197,8 @@ function SettingsPage({ user, onToast }: { user: AuthUser; onToast: (message: st
       <section className="panel">
         <div className="panel-heading"><div><p className="eyebrow">SEU ACESSO</p><h3>{user.name}</h3></div></div>
         <p className="muted">{user.email} · {roleLabel(user.role)}</p>
-        {user.role === 'Administração' && <p className="muted">Para criar ou desativar contas, use o menu Usuários.</p>}
+        {user.role === 'Administração' && <p className="muted">Para cadastrar o gerente e os demais acessos, use o menu Usuários.</p>}
+        {user.role === 'Gerente' && <p className="muted">Para ver e cadastrar técnicos de segurança, use o menu Usuários.</p>}
       </section>
     </div>
   );

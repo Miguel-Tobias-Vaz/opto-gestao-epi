@@ -1,5 +1,6 @@
 -- Opto Gestão EPI — rode isto no SQL Editor do Supabase (uma vez).
 -- Não insere dados de exemplo: o sistema começa vazio.
+-- Se a tabela profiles já existir, rode também supabase/add-gerente.sql.
 
 create extension if not exists "pgcrypto";
 
@@ -7,7 +8,7 @@ create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   name text not null,
   email text not null unique,
-  role text not null check (role in ('Administração', 'Técnico', 'Visualizador')),
+  role text not null check (role in ('Administração', 'Gerente', 'Técnico', 'Visualizador')),
   active boolean not null default true,
   created_at timestamptz not null default now()
 );
