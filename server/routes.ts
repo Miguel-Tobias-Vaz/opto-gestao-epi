@@ -27,6 +27,7 @@ const loginLimiter = rateLimit({
   limit: 8,
   standardHeaders: true,
   legacyHeaders: false,
+  validate: false,
   message: { error: 'Muitas tentativas de acesso. Aguarde alguns minutos.' },
 });
 
@@ -45,7 +46,11 @@ router.post(
     const { email, password } = loginSchema.parse(req.body);
     const { data, error } = await supabaseAuth.auth.signInWithPassword({ email, password });
     if (error || !data.session || !data.user) {
-      throw new HttpError(401, 'E-mail ou senha inválidos.');
+      const raw = error?.message ?? '';
+      if (/confirm/i.test(raw)) {
+        throw new HttpError(401, 'E-mail ainda não confirmado. No Supabase: Authentication → Users → o usuário → Confirm.');
+      }
+      throw new HttpError(401, 'E-mail ou senha inválidos. Use o usuário criado em Authentication → Users.');
     }
     const profile = await loadProfile(
       data.user.id,
@@ -54,7 +59,7 @@ router.post(
     );
     if (!profile.active) throw new HttpError(401, 'Usuário inativo.');
     setAuthCookies(res, data.session);
-    res.json({ user: mapUser(profile) });
+    res.json({ user: mapUser(profile), accessToken: data.session.access_token });
   }),
 );
 
@@ -77,8 +82,9 @@ router.post(
     const updated = await supabase.auth.admin.updateUserById(req.user!.id, { password: newPassword });
     if (updated.error) throw new HttpError(400, updated.error.message);
     const next = await supabaseAuth.auth.signInWithPassword({ email: req.user!.email, password: newPassword });
-    if (next.data.session) setAuthCookies(res, next.data.session);
-    res.json({ ok: true });
+    if (!next.data.session) throw new HttpError(400, 'Senha alterada. Entre novamente com a nova senha.');
+    setAuthCookies(res, next.data.session);
+    res.json({ ok: true, accessToken: next.data.session.access_token });
   }),
 );
 
@@ -122,7 +128,7 @@ router.post(
     );
     if (!profile.active) throw new HttpError(401, 'Usuário inativo.');
     setAuthCookies(res, signed.data.session);
-    res.json({ user: mapUser(profile) });
+    res.json({ user: mapUser(profile), accessToken: signed.data.session.access_token });
   }),
 );
 

@@ -28,8 +28,8 @@ export function cookieOptions() {
 
 export function setAuthCookies(res: Response, session: Session) {
   const options = cookieOptions();
-  res.cookie(ACCESS_COOKIE, session.access_token, options);
   res.cookie(REFRESH_COOKIE, session.refresh_token, options);
+  res.setHeader('X-Access-Token', session.access_token);
 }
 
 export function clearAuthCookies(res: Response) {
@@ -66,7 +66,8 @@ export async function loadProfile(userId: string, email: string, fallbackName: s
 
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   try {
-    let access = req.cookies?.[ACCESS_COOKIE];
+    const header = req.headers.authorization;
+    let access = header?.startsWith('Bearer ') ? header.slice(7) : req.cookies?.[ACCESS_COOKIE];
     const refresh = req.cookies?.[REFRESH_COOKIE];
 
     if ((!access || typeof access !== 'string') && refresh) {

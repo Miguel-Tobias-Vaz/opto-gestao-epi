@@ -7,19 +7,54 @@ export class ApiError extends Error {
   }
 }
 
+const TOKEN_KEY = 'opto_access';
+
+function getToken() {
+  try {
+    return sessionStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function setToken(token: string | null) {
+  try {
+    if (token) sessionStorage.setItem(TOKEN_KEY, token);
+    else sessionStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers);
   if (options.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+  const token = getToken();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
 
-  const response = await fetch(`/api${path}`, {
-    ...options,
-    headers,
-    credentials: 'include',
-  });
+  let response: Response;
+  try {
+    response = await fetch(`/api${path}`, {
+      ...options,
+      headers,
+      credentials: 'include',
+    });
+  } catch {
+    throw new ApiError(
+      'Não foi possível falar com o servidor. No PC, rode npm run dev. Na Vercel, confira as variáveis de ambiente.',
+      0,
+    );
+  }
 
-  const data = await response.json().catch(() => ({} as { error?: unknown; message?: unknown }));
+  const nextToken = response.headers.get('x-access-token');
+  if (nextToken) setToken(nextToken);
+
+  const data = await response.json().catch(() => ({} as { error?: unknown; message?: unknown; accessToken?: string }));
+  if (typeof data.accessToken === 'string') setToken(data.accessToken);
+
   if (!response.ok) {
     if (response.status === 401 && path !== '/auth/login' && path !== '/auth/me' && path !== '/auth/forgot' && path !== '/auth/reset') {
+      setToken(null);
       window.dispatchEvent(new Event('opto:unauthorized'));
     }
     const message =
@@ -27,8 +62,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
         ? data.error
         : typeof data.message === 'string'
           ? data.message
-          : response.status === 502
-            ? 'A API não respondeu. Confira se o npm run dev está no ar.'
+          : response.status === 502 || response.status === 0
+            ? 'A API não respondeu. No PC, rode npm run dev. Na Vercel, confira as variáveis de ambiente.'
             : 'Não foi possível concluir a operação.';
     throw new ApiError(message, response.status);
   }
@@ -36,14 +71,27 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
-  login: (email: string, password: string) => request<{ user: import('@/types').AuthUser }>('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
-  logout: () => request('/auth/logout', { method: 'POST' }),
+  login: async (email: string, password: string) => {
+    const result = await request<{ user: import('@/types').AuthUser; accessToken?: string }>('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
+    if (result.accessToken) setToken(result.accessToken);
+    return result;
+  },
+  logout: async () => {
+    await request('/auth/logout', { method: 'POST' }).catch(() => undefined);
+    setToken(null);
+  },
   me: () => request<{ user: import('@/types').AuthUser | null }>('/auth/me'),
   forgotPassword: (email: string) => request('/auth/forgot', { method: 'POST', body: JSON.stringify({ email }) }),
-  resetPassword: (accessToken: string, refreshToken: string, password: string) =>
-    request<{ user: import('@/types').AuthUser }>('/auth/reset', { method: 'POST', body: JSON.stringify({ accessToken, refreshToken, password }) }),
-  changePassword: (currentPassword: string, newPassword: string) =>
-    request('/auth/password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) }),
+  resetPassword: async (accessToken: string, refreshToken: string, password: string) => {
+    const result = await request<{ user: import('@/types').AuthUser; accessToken?: string }>('/auth/reset', { method: 'POST', body: JSON.stringify({ accessToken, refreshToken, password }) });
+    if (result.accessToken) setToken(result.accessToken);
+    return result;
+  },
+  changePassword: async (currentPassword: string, newPassword: string) => {
+    const result = await request<{ ok: boolean; accessToken?: string }>('/auth/password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) });
+    if (result.accessToken) setToken(result.accessToken);
+    return result;
+  },
   users: {
     list: () => request<import('@/types').SystemUser[]>('/users'),
     create: (body: object) => request<import('@/types').SystemUser>('/users', { method: 'POST', body: JSON.stringify(body) }),

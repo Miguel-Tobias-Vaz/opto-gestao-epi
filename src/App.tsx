@@ -121,7 +121,7 @@ function Login({ onEnter }: { onEnter: (user: AuthUser) => void }) {
               onEnter(user);
             }
           } catch (err) {
-            setError(err instanceof ApiError ? err.message : 'Não foi possível concluir.');
+            setError(err instanceof ApiError ? err.message : 'Não foi possível falar com o servidor. No PC, rode npm run dev.');
           } finally {
             setBusy(false);
           }
@@ -260,7 +260,7 @@ export default function App() {
   );
 
   if (booting) return <div className="boot-screen">Carregando Opto Gestão EPI...</div>;
-  if (!user) return <Login onEnter={async (nextUser) => { setUser(nextUser); await refresh(); }} />;
+  if (!user) return <Login onEnter={async (nextUser) => { setUser(nextUser); try { await refresh(); } catch { /* sessão ok; dados recarregam nas telas */ } }} />;
 
   const logout = async () => {
     await api.logout().catch(() => undefined);

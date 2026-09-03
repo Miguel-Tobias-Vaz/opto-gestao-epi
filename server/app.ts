@@ -13,7 +13,8 @@ function allowedOrigins() {
   const extras = [process.env.APP_URL, process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '']
     .map((value) => value?.trim().replace(/\/$/, ''))
     .filter(Boolean) as string[];
-  return ['http://localhost:5173', 'http://127.0.0.1:5173', ...extras];
+  extras.push(process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : '');
+  return ['http://localhost:5173', 'http://127.0.0.1:5173', ...extras.filter(Boolean)];
 }
 
 export function createApp(options: { serveStatic?: boolean } = {}) {
@@ -28,8 +29,16 @@ export function createApp(options: { serveStatic?: boolean } = {}) {
   );
   app.use(
     cors({
-      origin: allowedOrigins(),
+      origin(origin, callback) {
+        if (!origin) {
+          callback(null, true);
+          return;
+        }
+        const allowed = allowedOrigins();
+        callback(null, allowed.includes(origin) || origin.endsWith('.vercel.app'));
+      },
       credentials: true,
+      exposedHeaders: ['X-Access-Token'],
     }),
   );
   app.use(express.json({ limit: '32kb' }));
