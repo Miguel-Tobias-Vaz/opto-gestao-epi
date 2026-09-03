@@ -24,6 +24,7 @@ import {
   Sparkles,
   Trash2,
   UploadCloud,
+  UserCog,
   Users,
   Warehouse,
   X,
@@ -36,12 +37,12 @@ import { Badge } from '@/components/ui/Badge';
 import { Footer } from '@/components/ui/footer';
 import { Modal, Table } from '@/components/ui/Modal';
 import { api, ApiError } from '@/lib/api';
-import { downloadCsv, firstName, formatDate, formatDateTime, greeting, isoNextYear, isoToday, todayLabel } from '@/lib/format';
+import { downloadCsv, firstName, formatDate, formatDateTime, greeting, isoNextYear, isoToday, roleLabel, todayLabel } from '@/lib/format';
 import type { AuthUser, DashboardData, Employee, EmployeeStatus, Epi, InventorySession, Movement, MovementType, Role, SystemUser } from '@/types';
 
-type Page = 'Dashboard' | 'Funcionários' | 'EPIs' | 'Estoque' | 'Movimentações' | 'Inventário' | 'Relatórios' | 'Contratos' | 'Configurações';
+type Page = 'Dashboard' | 'Funcionários' | 'EPIs' | 'Estoque' | 'Movimentações' | 'Inventário' | 'Relatórios' | 'Contratos' | 'Usuários' | 'Configurações';
 
-const nav: { label: Page; icon: typeof LayoutDashboard }[] = [
+const nav: { label: Page; icon: typeof LayoutDashboard; adminOnly?: boolean }[] = [
   { label: 'Dashboard', icon: LayoutDashboard },
   { label: 'Funcionários', icon: Users },
   { label: 'EPIs', icon: HardHat },
@@ -50,8 +51,21 @@ const nav: { label: Page; icon: typeof LayoutDashboard }[] = [
   { label: 'Inventário', icon: ClipboardCheck },
   { label: 'Contratos', icon: FileSearch },
   { label: 'Relatórios', icon: BarChart3 },
+  { label: 'Usuários', icon: UserCog, adminOnly: true },
   { label: 'Configurações', icon: Settings },
 ];
+
+const emptyUserForm = { name: '', email: '', password: '', role: 'Técnico' as Role };
+
+function RoleSelect({ value, onChange }: { value: Role; onChange: (role: Role) => void }) {
+  return (
+    <select value={value} onChange={(event) => onChange(event.target.value as Role)}>
+      <option value="Administração">Administração</option>
+      <option value="Técnico">Técnico de segurança</option>
+      <option value="Visualizador">Visualizador</option>
+    </select>
+  );
+}
 
 type ContractStatus = 'Aguardando' | 'Extraindo' | 'Concluído';
 type Contract = { id: string; name: string; status: ContractStatus; confidence: number; supplier: string; value: string; expires: string; pages: number };
@@ -285,7 +299,7 @@ export default function App() {
           </button>
         </div>
         <nav>
-          {nav.map(({ label, icon: Icon }) => (
+          {nav.filter((item) => !item.adminOnly || user.role === 'Administração').map(({ label, icon: Icon }) => (
             <button key={label} className={page === label ? 'nav-item active' : 'nav-item'} onClick={() => openPage(label)} title={collapsed ? label : undefined}>
               <Icon size={18} />
               {!collapsed && <span>{label}</span>}
@@ -295,7 +309,7 @@ export default function App() {
         <div className="sidebar-bottom">
           <div className="user-chip">
             <div className="avatar">{user.initials}</div>
-            {!collapsed && <div><strong>{user.name}</strong><small>{user.role}</small></div>}
+            {!collapsed && <div><strong>{user.name}</strong><small>{roleLabel(user.role)}</small></div>}
           </div>
           <button className="nav-item" onClick={logout}><ArrowUpFromLine size={18} />{!collapsed && <span>Sair</span>}</button>
         </div>
@@ -345,6 +359,7 @@ export default function App() {
             {page === 'Inventário' && <Inventory canWrite={canWrite} onToast={showToast} onChange={refresh} />}
             {page === 'Contratos' && <Contracts />}
             {page === 'Relatórios' && <Reports epis={epis} employees={employees} movements={movements} />}
+            {page === 'Usuários' && <UsersPage user={user} onToast={showToast} />}
             {page === 'Configurações' && <SettingsPage user={user} onToast={showToast} />}
           </motion.div>
         </main>
@@ -973,19 +988,178 @@ function Contracts() {
   );
 }
 
-function SettingsPage({ user, onToast }: { user: AuthUser; onToast: (message: string) => void }) {
+function UsersPage({ user, onToast }: { user: AuthUser; onToast: (message: string) => void }) {
   const isAdmin = user.role === 'Administração';
   const [users, setUsers] = useState<SystemUser[]>([]);
-  const [currentPassword, setCurrentPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [creating, setCreating] = useState({ name: '', email: '', password: '', role: 'Técnico' as Role });
+  const [creating, setCreating] = useState(emptyUserForm);
+  const [editing, setEditing] = useState<SystemUser | null>(null);
+  const [editForm, setEditForm] = useState({ name: '', email: '', password: '', role: 'Técnico' as Role, active: true });
+  const [busy, setBusy] = useState(false);
 
   const loadUsers = async () => {
-    if (!isAdmin) return;
     setUsers(await api.users.list());
   };
 
-  useEffect(() => { void loadUsers().catch((error) => onToast(error.message)); }, [isAdmin]);
+  useEffect(() => {
+    if (!isAdmin) return;
+    void loadUsers().catch((error) => onToast(error instanceof Error ? error.message : 'Não foi possível carregar os usuários.'));
+  }, [isAdmin, onToast]);
+
+  if (!isAdmin) {
+    return <p className="muted">Somente a Administração gerencia usuários do sistema.</p>;
+  }
+
+  const openEdit = (item: SystemUser) => {
+    setEditing(item);
+    setEditForm({ name: item.name, email: item.email, password: '', role: item.role, active: item.active });
+  };
+
+  const toggleActive = async (item: SystemUser) => {
+    try {
+      await api.users.update(item.id, { active: !item.active });
+      await loadUsers();
+      onToast(item.active ? `${item.name} desativado` : `${item.name} reativado`);
+    } catch (error) {
+      onToast(error instanceof ApiError ? error.message : 'Não foi possível alterar o status.');
+    }
+  };
+
+  return (
+    <>
+      <div className="page-intro">
+        <div>
+          <p className="kicker">ACESSO</p>
+          <h2>Usuários do sistema</h2>
+          <p>Sua conta já é Administração. Crie o técnico de segurança e os demais acessos por aqui.</p>
+        </div>
+      </div>
+      <div className="settings-grid">
+        <section className="panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">PERFIS</p>
+              <h3>O que cada acesso pode fazer</h3>
+            </div>
+          </div>
+          <div className="role-legend">
+            <article><strong>Administração</strong><span>Cria, edita, ativa e desativa usuários. Opera todo o sistema.</span></article>
+            <article><strong>Técnico de segurança</strong><span>Opera EPIs, estoque, entregas, movimentações e inventário.</span></article>
+            <article><strong>Visualizador</strong><span>Consulta dashboards e listas, sem alterar dados.</span></article>
+          </div>
+        </section>
+        <section className="panel">
+          <div className="panel-heading"><div><p className="eyebrow">NOVO ACESSO</p><h3>Criar usuário</h3></div></div>
+          <form
+            className="form-grid"
+            onSubmit={async (event) => {
+              event.preventDefault();
+              setBusy(true);
+              try {
+                await api.users.create(creating);
+                setCreating(emptyUserForm);
+                await loadUsers();
+                onToast('Usuário criado. Ele já pode entrar com este e-mail e senha.');
+              } catch (error) {
+                onToast(error instanceof ApiError ? error.message : 'Não foi possível criar o usuário');
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            <div className="form-two">
+              <label>Nome<input value={creating.name} onChange={(event) => setCreating({ ...creating, name: event.target.value })} required /></label>
+              <label>E-mail<input type="email" value={creating.email} onChange={(event) => setCreating({ ...creating, email: event.target.value })} required /></label>
+            </div>
+            <div className="form-two">
+              <label>Senha inicial<input type="password" value={creating.password} onChange={(event) => setCreating({ ...creating, password: event.target.value })} minLength={8} required /></label>
+              <label>Perfil<RoleSelect value={creating.role} onChange={(role) => setCreating({ ...creating, role })} /></label>
+            </div>
+            <div className="form-actions"><button className="primary-button" disabled={busy}>{busy ? 'Criando...' : 'Criar usuário'}</button></div>
+          </form>
+        </section>
+        <section className="panel table-panel">
+          <div className="panel-heading compact"><div><p className="eyebrow">CADASTRO</p><h3>Quem tem acesso</h3></div></div>
+          <Table
+            headers={['Usuário', 'E-mail', 'Perfil', 'Status', '']}
+            rows={users.map((item) => [
+              <div className="person" key={item.id}>
+                <div className="avatar soft">{item.initials}</div>
+                <div>
+                  <strong>{item.name}</strong>
+                  {item.id === user.id ? <small>Você</small> : null}
+                </div>
+              </div>,
+              item.email,
+              roleLabel(item.role),
+              <Badge key={`${item.id}-active`} tone={item.active ? 'success' : 'warning'}>{item.active ? 'Ativo' : 'Inativo'}</Badge>,
+              <div className="row-actions" key={`${item.id}-actions`}>
+                <button className="small-action" type="button" onClick={() => openEdit(item)}>Editar</button>
+                {item.id !== user.id && (
+                  <button className="small-action" type="button" onClick={() => void toggleActive(item)}>
+                    {item.active ? 'Desativar' : 'Ativar'}
+                  </button>
+                )}
+              </div>,
+            ])}
+          />
+        </section>
+      </div>
+      {editing && (
+        <Modal title={`Editar ${editing.name}`} onClose={() => setEditing(null)}>
+          <form
+            className="form-grid"
+            onSubmit={async (event) => {
+              event.preventDefault();
+              setBusy(true);
+              try {
+                await api.users.update(editing.id, {
+                  name: editForm.name,
+                  email: editForm.email,
+                  role: editForm.role,
+                  active: editForm.active,
+                  ...(editForm.password ? { password: editForm.password } : {}),
+                });
+                setEditing(null);
+                await loadUsers();
+                onToast('Usuário atualizado');
+              } catch (error) {
+                onToast(error instanceof ApiError ? error.message : 'Não foi possível salvar.');
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            <div className="form-two">
+              <label>Nome<input value={editForm.name} onChange={(event) => setEditForm({ ...editForm, name: event.target.value })} required /></label>
+              <label>E-mail<input type="email" value={editForm.email} onChange={(event) => setEditForm({ ...editForm, email: event.target.value })} required /></label>
+            </div>
+            <div className="form-two">
+              <label>Nova senha (opcional)<input type="password" value={editForm.password} onChange={(event) => setEditForm({ ...editForm, password: event.target.value })} minLength={editForm.password ? 8 : undefined} placeholder="Deixe em branco para manter" /></label>
+              <label>Perfil<RoleSelect value={editForm.role} onChange={(role) => setEditForm({ ...editForm, role })} /></label>
+            </div>
+            {editing.id !== user.id && (
+              <label>
+                Status
+                <select value={editForm.active ? 'ativo' : 'inativo'} onChange={(event) => setEditForm({ ...editForm, active: event.target.value === 'ativo' })}>
+                  <option value="ativo">Ativo</option>
+                  <option value="inativo">Inativo</option>
+                </select>
+              </label>
+            )}
+            <div className="form-actions">
+              <button className="outline-button" type="button" onClick={() => setEditing(null)}>Cancelar</button>
+              <button className="primary-button" disabled={busy}>{busy ? 'Salvando...' : 'Salvar'}</button>
+            </div>
+          </form>
+        </Modal>
+      )}
+    </>
+  );
+}
+
+function SettingsPage({ user, onToast }: { user: AuthUser; onToast: (message: string) => void }) {
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
 
   return (
     <div className="settings-grid">
@@ -1010,64 +1184,11 @@ function SettingsPage({ user, onToast }: { user: AuthUser; onToast: (message: st
           <div className="form-actions"><button className="primary-button">Salvar senha</button></div>
         </form>
       </section>
-
-      {isAdmin && (
-        <section className="panel">
-          <div className="panel-heading"><div><p className="eyebrow">ACESSO</p><h3>Usuários do sistema</h3></div></div>
-          <form
-            className="form-grid"
-            onSubmit={async (event) => {
-              event.preventDefault();
-              try {
-                await api.users.create(creating);
-                setCreating({ name: '', email: '', password: '', role: 'Técnico' });
-                await loadUsers();
-                onToast('Usuário criado');
-              } catch (error) {
-                onToast(error instanceof ApiError ? error.message : 'Não foi possível criar o usuário');
-              }
-            }}
-          >
-            <div className="form-two">
-              <label>Nome<input value={creating.name} onChange={(event) => setCreating({ ...creating, name: event.target.value })} required /></label>
-              <label>E-mail<input type="email" value={creating.email} onChange={(event) => setCreating({ ...creating, email: event.target.value })} required /></label>
-            </div>
-            <div className="form-two">
-              <label>Senha inicial<input type="password" value={creating.password} onChange={(event) => setCreating({ ...creating, password: event.target.value })} minLength={8} required /></label>
-              <label>Perfil
-                <select value={creating.role} onChange={(event) => setCreating({ ...creating, role: event.target.value as Role })}>
-                  <option>Administração</option>
-                  <option>Técnico</option>
-                  <option>Visualizador</option>
-                </select>
-              </label>
-            </div>
-            <div className="form-actions"><button className="primary-button">Criar usuário</button></div>
-          </form>
-          <Table
-            headers={['Usuário', 'E-mail', 'Perfil', 'Status', '']}
-            rows={users.map((item) => [
-              <div className="person" key={item.id}><div className="avatar soft">{item.initials}</div><strong>{item.name}</strong></div>,
-              item.email,
-              item.role,
-              <Badge key={`${item.id}-active`} tone={item.active ? 'success' : 'warning'}>{item.active ? 'Ativo' : 'Inativo'}</Badge>,
-              item.id === user.id ? '' : (
-                <button
-                  key={`${item.id}-toggle`}
-                  className="small-action"
-                  onClick={async () => {
-                    await api.users.update(item.id, { active: !item.active });
-                    await loadUsers();
-                    onToast(item.active ? 'Usuário desativado' : 'Usuário reativado');
-                  }}
-                >
-                  {item.active ? 'Desativar' : 'Ativar'}
-                </button>
-              ),
-            ])}
-          />
-        </section>
-      )}
+      <section className="panel">
+        <div className="panel-heading"><div><p className="eyebrow">SEU ACESSO</p><h3>{user.name}</h3></div></div>
+        <p className="muted">{user.email} · {roleLabel(user.role)}</p>
+        {user.role === 'Administração' && <p className="muted">Para criar ou desativar contas, use o menu Usuários.</p>}
+      </section>
     </div>
   );
 }

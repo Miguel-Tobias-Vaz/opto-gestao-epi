@@ -31,6 +31,16 @@ export function firstName(name: string) {
   return name.split(/\s+/)[0] ?? name;
 }
 
+const ROLE_LABELS: Record<string, string> = {
+  Administração: 'Administração',
+  Técnico: 'Técnico de segurança',
+  Visualizador: 'Visualizador',
+};
+
+export function roleLabel(role: string) {
+  return ROLE_LABELS[role] ?? role;
+}
+
 export function isoToday() {
   return new Date().toISOString().slice(0, 10);
 }
