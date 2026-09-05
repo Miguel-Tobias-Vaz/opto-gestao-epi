@@ -16,9 +16,10 @@ import {
   loginSchema,
   movementSchema,
   resetPasswordSchema,
+  signatureSchema,
   updateUserSchema,
 } from './http.ts';
-import type { EmployeeRow, EpiRow, InventoryItemRow, InventorySessionRow, MovementRow, ProfileRow } from './types.ts';
+import type { EmployeeRow, EpiRow, InventoryItemRow, InventorySessionRow, MovementRow, MovementType, ProfileRow } from './types.ts';
 
 export const router = Router();
 
@@ -269,6 +270,80 @@ router.patch(
   }),
 );
 
+function mapSignature(row: { id: string; employee_id: string; movement_id: string | null; kind: 'termo' | 'linha' | 'devolucao'; image: string; signed_at: string }) {
+  return {
+    id: row.id,
+    employeeId: row.employee_id,
+    movementId: row.movement_id,
+    kind: row.kind,
+    image: row.image,
+    signedAt: row.signed_at,
+  };
+}
+
+function signatureTableMissing(error: { code?: string; message: string } | null) {
+  if (error && (error.code === '42P01' || /employee_signatures/i.test(error.message))) {
+    throw new HttpError(503, 'Rode o SQL supabase/add-signatures.sql no Supabase para liberar as assinaturas da ficha.');
+  }
+}
+
+router.get(
+  '/employees/:id/signatures',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const { data, error } = await supabase.from('employee_signatures').select('*').eq('employee_id', req.params.id).order('signed_at');
+    signatureTableMissing(error);
+    throwDb(error);
+    res.json((data ?? []).map((row) => mapSignature(row as Parameters<typeof mapSignature>[0])));
+  }),
+);
+
+router.post(
+  '/employees/:id/signatures',
+  requireAuth,
+  requireRole(...canWrite),
+  asyncHandler(async (req, res) => {
+    const body = signatureSchema.parse(req.body);
+    const needsMovement = body.kind === 'linha' || body.kind === 'devolucao';
+    if (needsMovement && !body.movementId) throw new HttpError(400, 'Informe a entrega que está sendo assinada.');
+    const employee = await supabase.from('employees').select('id').eq('id', req.params.id).maybeSingle();
+    throwDb(employee.error);
+    if (!employee.data) throw new HttpError(404, 'Colaborador não encontrado.');
+
+    const currentQuery = supabase.from('employee_signatures').select('id').eq('employee_id', req.params.id).eq('kind', body.kind);
+    const current = needsMovement
+      ? await currentQuery.eq('movement_id', body.movementId).maybeSingle()
+      : await currentQuery.maybeSingle();
+    signatureTableMissing(current.error);
+    throwDb(current.error);
+    if (current.data) {
+      const updated = await supabase
+        .from('employee_signatures')
+        .update({ image: body.image, signed_at: new Date().toISOString() })
+        .eq('id', current.data.id)
+        .select('*')
+        .single();
+      throwDb(updated.error);
+      res.json(mapSignature(updated.data as Parameters<typeof mapSignature>[0]));
+      return;
+    }
+
+    const created = await supabase
+      .from('employee_signatures')
+      .insert({
+        employee_id: req.params.id,
+        movement_id: needsMovement ? body.movementId : null,
+        kind: body.kind,
+        image: body.image,
+      })
+      .select('*')
+      .single();
+    signatureTableMissing(created.error);
+    throwDb(created.error);
+    res.status(201).json(mapSignature(created.data as Parameters<typeof mapSignature>[0]));
+  }),
+);
+
 router.get(
   '/epis',
   requireAuth,
@@ -322,9 +397,56 @@ router.get(
   asyncHandler(async (_req, res) => {
     const { data, error } = await supabase.from('movements').select('*').order('created_at', { ascending: false });
     throwDb(error);
-    res.json(((data ?? []) as MovementRow[]).map(mapMovement));
+    const rows = (data ?? []) as MovementRow[];
+    const userIds = [...new Set(rows.map((row) => row.user_id).filter(Boolean))] as string[];
+    const names = new Map<string, string>();
+    if (userIds.length) {
+      const profiles = await supabase.from('profiles').select('id, name').in('id', userIds);
+      throwDb(profiles.error);
+      for (const profile of profiles.data ?? []) names.set(profile.id, profile.name);
+    }
+    res.json(rows.map((row) => mapMovement(row, names.get(row.user_id ?? '') ?? '')));
   }),
 );
+
+function applyStock(epi: EpiRow, type: MovementType, quantity: number, employee?: EmployeeRow) {
+  let available = epi.available;
+  let inUse = epi.in_use;
+  let lost = epi.lost;
+  let broken = epi.broken;
+
+  if (type !== 'Ajuste' && quantity < 1) throw new HttpError(400, `Quantidade de ${epi.name} deve ser no mínimo 1.`);
+  if (type === 'Ajuste' && quantity === 0) throw new HttpError(400, `Informe um ajuste diferente de zero para ${epi.name}.`);
+
+  if (type === 'Entrada') {
+    available += quantity;
+  } else if (type === 'Entrega') {
+    if (!employee) throw new HttpError(400, 'Selecione o colaborador que recebe o EPI.');
+    if (employee.status !== 'Ativo') throw new HttpError(400, 'Só é possível entregar EPI a colaborador ativo.');
+    if (available < quantity) throw new HttpError(400, `Estoque insuficiente de ${epi.name}.`);
+    available -= quantity;
+    inUse += quantity;
+  } else if (type === 'Devolução') {
+    if (inUse < quantity) throw new HttpError(400, `Quantidade em uso insuficiente para devolver ${epi.name}.`);
+    inUse -= quantity;
+    available += quantity;
+  } else if (type === 'Perda') {
+    if (inUse >= quantity) inUse -= quantity;
+    else if (available >= quantity) available -= quantity;
+    else throw new HttpError(400, `Não há unidades suficientes para registrar a perda de ${epi.name}.`);
+    lost += quantity;
+  } else if (type === 'Quebra') {
+    if (inUse >= quantity) inUse -= quantity;
+    else if (available >= quantity) available -= quantity;
+    else throw new HttpError(400, `Não há unidades suficientes para registrar a quebra de ${epi.name}.`);
+    broken += quantity;
+  } else if (type === 'Ajuste') {
+    if (available + quantity < 0) throw new HttpError(400, `O ajuste deixaria o estoque de ${epi.name} negativo.`);
+    available += quantity;
+  }
+
+  return { available, in_use: inUse, lost, broken };
+}
 
 router.post(
   '/movements',
@@ -332,13 +454,8 @@ router.post(
   requireRole(...canWrite),
   asyncHandler(async (req, res) => {
     const body = movementSchema.parse(req.body);
-    if (body.type !== 'Ajuste' && body.quantity < 1) throw new HttpError(400, 'Quantidade deve ser no mínimo 1.');
-    if (body.type === 'Ajuste' && body.quantity === 0) throw new HttpError(400, 'Informe um ajuste diferente de zero.');
-
-    const epiRes = await supabase.from('epis').select('*').eq('id', body.epiId).maybeSingle();
-    throwDb(epiRes.error);
-    if (!epiRes.data) throw new HttpError(404, 'EPI não encontrado.');
-    const epi = epiRes.data as EpiRow;
+    const ids = body.items.map((item) => item.epiId);
+    if (new Set(ids).size !== ids.length) throw new HttpError(400, 'Não repita o mesmo EPI na mesma movimentação.');
 
     let employee: EmployeeRow | undefined;
     if (body.employeeId) {
@@ -348,57 +465,38 @@ router.post(
       employee = employeeRes.data as EmployeeRow;
     }
 
-    let available = epi.available;
-    let inUse = epi.in_use;
-    let lost = epi.lost;
-    let broken = epi.broken;
+    const epiRes = await supabase.from('epis').select('*').in('id', ids);
+    throwDb(epiRes.error);
+    const byId = new Map(((epiRes.data ?? []) as EpiRow[]).map((row) => [row.id, row]));
+    if (byId.size !== ids.length) throw new HttpError(404, 'Um ou mais EPIs não foram encontrados.');
 
-    if (body.type === 'Entrada') {
-      available += body.quantity;
-    } else if (body.type === 'Entrega') {
-      if (!employee) throw new HttpError(400, 'Selecione o colaborador que recebe o EPI.');
-      if (employee.status !== 'Ativo') throw new HttpError(400, 'Só é possível entregar EPI a colaborador ativo.');
-      if (available < body.quantity) throw new HttpError(400, 'Estoque disponível insuficiente.');
-      available -= body.quantity;
-      inUse += body.quantity;
-    } else if (body.type === 'Devolução') {
-      if (inUse < body.quantity) throw new HttpError(400, 'Quantidade em uso insuficiente para devolução.');
-      inUse -= body.quantity;
-      available += body.quantity;
-    } else if (body.type === 'Perda') {
-      if (inUse >= body.quantity) inUse -= body.quantity;
-      else if (available >= body.quantity) available -= body.quantity;
-      else throw new HttpError(400, 'Não há unidades suficientes para registrar a perda.');
-      lost += body.quantity;
-    } else if (body.type === 'Quebra') {
-      if (inUse >= body.quantity) inUse -= body.quantity;
-      else if (available >= body.quantity) available -= body.quantity;
-      else throw new HttpError(400, 'Não há unidades suficientes para registrar a quebra.');
-      broken += body.quantity;
-    } else if (body.type === 'Ajuste') {
-      if (available + body.quantity < 0) throw new HttpError(400, 'O ajuste deixaria o estoque negativo.');
-      available += body.quantity;
+    const planned = body.items.map((item) => {
+      const epi = byId.get(item.epiId)!;
+      return { epi, quantity: item.quantity, stock: applyStock(epi, body.type, item.quantity, employee) };
+    });
+
+    const created = [];
+    for (const row of planned) {
+      const stock = await supabase.from('epis').update(row.stock).eq('id', row.epi.id);
+      throwDb(stock.error);
+      const movement = await supabase
+        .from('movements')
+        .insert({
+          type: body.type,
+          epi_id: row.epi.id,
+          epi_name: row.epi.name,
+          employee_id: employee?.id ?? null,
+          person_name: employee?.name ?? req.user!.name,
+          user_id: req.user!.id,
+          quantity: row.quantity,
+          note: body.note,
+        })
+        .select('*')
+        .single();
+      throwDb(movement.error);
+      created.push(mapMovement(movement.data as MovementRow, req.user!.name));
     }
-
-    const stock = await supabase.from('epis').update({ available, in_use: inUse, lost, broken }).eq('id', epi.id);
-    throwDb(stock.error);
-
-    const movement = await supabase
-      .from('movements')
-      .insert({
-        type: body.type,
-        epi_id: epi.id,
-        epi_name: epi.name,
-        employee_id: employee?.id ?? null,
-        person_name: employee?.name ?? req.user!.name,
-        user_id: req.user!.id,
-        quantity: body.quantity,
-        note: body.note,
-      })
-      .select('*')
-      .single();
-    throwDb(movement.error);
-    res.status(201).json(mapMovement(movement.data as MovementRow));
+    res.status(201).json({ movements: created });
   }),
 );
 

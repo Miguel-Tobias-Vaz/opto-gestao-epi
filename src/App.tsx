@@ -16,6 +16,9 @@ import {
   LayoutDashboard,
   Menu,
   Package,
+  PenLine,
+  Printer,
+  Plus,
   PanelLeftClose,
   PanelLeftOpen,
   Search,
@@ -35,10 +38,11 @@ import { ShaderHero } from '@/components/ui/shader-hero';
 import { StatCard } from '@/components/ui/StatCard';
 import { Badge } from '@/components/ui/Badge';
 import { Footer } from '@/components/ui/footer';
+import { SignaturePad } from '@/components/SignaturePad';
 import { Modal, Table } from '@/components/ui/Modal';
 import { api, ApiError } from '@/lib/api';
-import { downloadCsv, firstName, formatDate, formatDateTime, greeting, isoNextYear, isoToday, roleLabel, todayLabel } from '@/lib/format';
-import type { AuthUser, DashboardData, Employee, EmployeeStatus, Epi, InventorySession, Movement, MovementType, Role, SystemUser } from '@/types';
+import { downloadCsv, employeeFichaLines, employeeHoldings, firstName, formatDate, formatDateTime, greeting, isoNextYear, isoToday, roleLabel, todayLabel } from '@/lib/format';
+import type { AuthUser, DashboardData, Employee, EmployeeSignature, EmployeeStatus, Epi, InventorySession, Movement, MovementType, Role, SystemUser } from '@/types';
 
 type Page = 'Dashboard' | 'Funcionários' | 'EPIs' | 'Estoque' | 'Movimentações' | 'Inventário' | 'Relatórios' | 'Contratos' | 'Usuários' | 'Configurações';
 
@@ -395,7 +399,7 @@ export default function App() {
         <main className="content">
           <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} key={page}>
             {page === 'Dashboard' && <Dashboard user={user} canWrite={canWrite} revision={`${movements[0]?.id ?? '0'}-${epis.reduce((sum, item) => sum + item.available + item.inUse, 0)}`} onDelivery={() => { if (!epis[0]) return showToast('Cadastre um EPI para registrar entregas.'); if (!employees.some((item) => item.status === 'Ativo')) return showToast('Cadastre um colaborador ativo para entregar.'); setDelivery(epis[0]); }} onToast={showToast} />}
-            {page === 'Funcionários' && <Employees query={query} employees={employees} canWrite={canWrite} onChange={refresh} onToast={showToast} />}
+            {page === 'Funcionários' && <Employees query={query} employees={employees} movements={movements} epis={epis} canWrite={canWrite} onChange={refresh} onToast={showToast} />}
             {page === 'EPIs' && <EpisTable epis={filteredEpis} canWrite={canWrite} onDelivery={setDelivery} onChange={refresh} onToast={showToast} />}
             {page === 'Estoque' && <Stock epis={filteredEpis} canWrite={canWrite} onChange={refresh} onToast={showToast} />}
             {page === 'Movimentações' && <Movements movements={filteredMovements} canWrite={canWrite} epis={epis} employees={employees} onChange={refresh} onToast={showToast} />}
@@ -547,27 +551,50 @@ function Dashboard({ user, canWrite, revision, onDelivery, onToast }: { user: Au
   );
 }
 
-function Employees({ query, employees, canWrite, onChange, onToast }: { query: string; employees: Employee[]; canWrite: boolean; onChange: () => Promise<void>; onToast: (message: string) => void }) {
+function Employees({ query, employees, movements, epis, canWrite, onChange, onToast }: { query: string; employees: Employee[]; movements: Movement[]; epis: Epi[]; canWrite: boolean; onChange: () => Promise<void>; onToast: (message: string) => void }) {
   const [editing, setEditing] = useState<Partial<Employee> | null>(null);
+  const [ficha, setFicha] = useState<Employee | null>(null);
+  const [move, setMove] = useState<{ type: MovementType; employeeId: string; epiId?: string } | null>(null);
   const filtered = employees.filter((employee) => `${employee.name} ${employee.registration} ${employee.sector} ${employee.role}`.toLowerCase().includes(query.toLowerCase()));
 
   return (
     <section className="panel table-panel">
       <div className="page-intro compact">
-        <div><p className="kicker">CADASTRO</p><h2>Funcionários</h2><p>{filtered.length} colaboradores encontrados</p></div>
+        <div><p className="kicker">CADASTRO</p><h2>Funcionários</h2><p>{filtered.length} colaboradores · cada um com ficha de EPIs</p></div>
         {canWrite && <button className="primary-button" onClick={() => setEditing({ name: '', registration: '', role: '', sector: '', admission: isoToday(), status: 'Ativo' })}><Users size={16} /> Novo funcionário</button>}
       </div>
       <Table
-        headers={['Colaborador', 'Matrícula', 'Cargo / setor', 'Admissão', 'Status', '']}
-        rows={filtered.map((employee) => [
-          <div className="person" key={employee.id}><div className="avatar soft">{employee.initials}</div><strong>{employee.name}</strong></div>,
-          employee.registration,
-          <span key={`${employee.id}-role`}>{employee.role}<small>{employee.sector}</small></span>,
-          formatDate(employee.admission),
-          <Badge key={`${employee.id}-status`} tone={employee.status === 'Ativo' ? 'success' : 'warning'}>{employee.status}</Badge>,
-          canWrite ? <button key={`${employee.id}-edit`} className="small-action" onClick={() => setEditing(employee)}>Editar</button> : '',
-        ])}
+        headers={['Colaborador', 'Matrícula', 'Cargo / setor', 'EPIs em posse', 'Status', '']}
+        rows={filtered.map((employee) => {
+          const held = employeeHoldings(employee.id, movements, epis);
+          const total = held.reduce((sum, item) => sum + item.quantity, 0);
+          return [
+            <button className="person person-link" type="button" key={employee.id} onClick={() => setFicha(employee)}>
+              <div className="avatar soft">{employee.initials}</div>
+              <strong>{employee.name}</strong>
+            </button>,
+            employee.registration,
+            <span key={`${employee.id}-role`}>{employee.role}<small>{employee.sector}</small></span>,
+            <Badge key={`${employee.id}-epis`} tone={total ? 'info' : 'neutral'}>{total ? `${total} un.` : 'Nenhum'}</Badge>,
+            <Badge key={`${employee.id}-status`} tone={employee.status === 'Ativo' ? 'success' : 'warning'}>{employee.status}</Badge>,
+            <div className="row-actions" key={`${employee.id}-actions`}>
+              <button className="small-action" type="button" onClick={() => setFicha(employee)}>Ficha</button>
+              {canWrite && <button className="small-action" type="button" onClick={() => setEditing(employee)}>Editar</button>}
+            </div>,
+          ];
+        })}
       />
+      {ficha && (
+        <EmployeeFicha
+          employee={ficha}
+          movements={movements}
+          epis={epis}
+          canWrite={canWrite}
+          onClose={() => setFicha(null)}
+          onEdit={() => { setEditing(ficha); setFicha(null); }}
+          onMove={(next) => setMove(next)}
+        />
+      )}
       {editing && (
         <EmployeeForm
           value={editing}
@@ -575,7 +602,212 @@ function Employees({ query, employees, canWrite, onChange, onToast }: { query: s
           onSaved={async () => { await onChange(); onToast(editing.id ? 'Colaborador atualizado' : 'Colaborador cadastrado'); setEditing(null); }}
         />
       )}
+      {move && (
+        <MovementForm
+          title={move.type === 'Devolução' ? `Devolver · ${employees.find((item) => item.id === move.employeeId)?.name ?? ''}` : `Entregar · ${employees.find((item) => item.id === move.employeeId)?.name ?? ''}`}
+          epis={move.type === 'Devolução' ? epis.filter((epi) => employeeHoldings(move.employeeId, movements, epis).some((item) => item.epiId === epi.id)) : epis}
+          employees={employees}
+          initial={{ type: move.type, epiId: move.epiId, employeeId: move.employeeId }}
+          onClose={() => setMove(null)}
+          onSaved={async () => { await onChange(); onToast(move.type === 'Devolução' ? 'Devolução registrada' : 'Entrega registrada'); setMove(null); }}
+        />
+      )}
     </section>
+  );
+}
+
+type FichaSigning = { kind: 'termo' } | { kind: 'linha' | 'devolucao'; movementId: string };
+
+function FichaVisto({ signed, canWrite, label, onSign }: { signed?: EmployeeSignature; canWrite: boolean; label: string; onSign: () => void }) {
+  return (
+    <td className="ficha-sign-cell">
+      <div className="ficha-sign-slot">
+        {signed ? <img className="ficha-sign-img" src={signed.image} alt={label} /> : <i className="ficha-sign-line" />}
+        {canWrite && (
+          <button className="small-action no-print" type="button" onClick={onSign}>
+            <PenLine size={12} /> {signed ? 'Refazer' : 'Visto'}
+          </button>
+        )}
+      </div>
+    </td>
+  );
+}
+
+function EmployeeFicha({ employee, movements, epis, canWrite, onClose, onEdit, onMove }: { employee: Employee; movements: Movement[]; epis: Epi[]; canWrite: boolean; onClose: () => void; onEdit: () => void; onMove: (next: { type: MovementType; employeeId: string; epiId?: string }) => void }) {
+  const holdings = employeeHoldings(employee.id, movements, epis);
+  const lines = employeeFichaLines(employee.id, movements, epis);
+  const [signatures, setSignatures] = useState<EmployeeSignature[]>([]);
+  const [signing, setSigning] = useState<FichaSigning | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const termo = signatures.find((item) => item.kind === 'termo');
+  const visto = (kind: 'linha' | 'devolucao', movementId: string) => signatures.find((item) => item.kind === kind && item.movementId === movementId);
+
+  useEffect(() => {
+    let alive = true;
+    api.employees.signatures(employee.id)
+      .then((data) => { if (alive) setSignatures(data); })
+      .catch((err) => { if (alive) setError(err instanceof ApiError ? err.message : 'Não foi possível carregar as assinaturas.'); });
+    return () => { alive = false; };
+  }, [employee.id]);
+
+  const saveSignature = async (image: string) => {
+    if (!signing) return;
+    setBusy(true);
+    setError('');
+    try {
+      const saved = await api.employees.sign(employee.id, {
+        kind: signing.kind,
+        movementId: signing.kind === 'termo' ? null : signing.movementId,
+        image,
+      });
+      setSignatures((current) => {
+        const without = current.filter((item) => item.id !== saved.id && !(item.kind === saved.kind && item.movementId === saved.movementId));
+        return [...without, saved];
+      });
+      setSigning(null);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Não foi possível salvar a assinatura.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title="Ficha de entrega de EPI" onClose={onClose} wide>
+      <div className="ficha-actions no-print">
+        {canWrite && employee.status === 'Ativo' && <button className="small-action" type="button" onClick={() => onMove({ type: 'Entrega', employeeId: employee.id })}>Entregar EPI</button>}
+        {canWrite && holdings.length > 0 && <button className="small-action" type="button" onClick={() => onMove({ type: 'Devolução', employeeId: employee.id, epiId: holdings[0]?.epiId })}>Devolver</button>}
+        {canWrite && <button className="small-action" type="button" onClick={onEdit}>Editar cadastro</button>}
+        <button
+          className="small-action"
+          type="button"
+          onClick={() => downloadCsv(
+            `ficha-${employee.registration}.csv`,
+            ['Descrição', 'Fabricante', 'C.A.', 'Data entrega', 'Qt. entrega', 'Visto entrega', 'Data devolução', 'Qt. devolução', 'Visto devolução'],
+            lines.map((item) => [
+              item.epi,
+              item.brand,
+              item.ca,
+              formatDate(item.deliveredAt),
+              item.quantity,
+              visto('linha', item.id) ? 'Sim' : '',
+              item.dischargedAt ? formatDate(item.dischargedAt) : '',
+              item.returnedQuantity || '',
+              visto('devolucao', item.id) ? 'Sim' : '',
+            ]),
+          )}
+        >
+          Exportar
+        </button>
+        <button className="small-action" type="button" onClick={() => window.print()}><Printer size={14} /> Imprimir</button>
+      </div>
+      {error && <p className="form-error no-print">{error}</p>}
+      <article className="ficha-doc">
+        <div className="ficha-top">
+          <div className="ficha-brand">
+            <img src="/logo/OPTO%20-%20Azul.png" alt="Opto Gestão EPI" />
+            <strong>Opto Gestão EPI</strong>
+          </div>
+          <h2>
+            FICHA DE ENTREGA DE E.P.I
+            <small>EQUIPAMENTO DE PROTEÇÃO INDIVIDUAL</small>
+          </h2>
+        </div>
+        <div className="ficha-meta-box">
+          <span><b>Unidade / Setor</b>{employee.sector}</span>
+          <span><b>Registro</b>{employee.registration}</span>
+          <span><b>Função</b>{employee.role}</span>
+          <span><b>Data de admissão</b>{formatDate(employee.admission)}</span>
+        </div>
+        <p className="ficha-name"><b>Nome:</b> {employee.name}</p>
+        <section className="ficha-clauses">
+          <p>1. Declaro que recebi da empresa os Equipamentos de Proteção Individual relacionados nesta ficha, novos e em perfeitas condições de uso.</p>
+          <p>2. Comprometo-me a utilizá-los exclusivamente para a finalidade a que se destinam, a conservá-los e a comunicar imediatamente qualquer alteração que os torne impróprios para o uso.</p>
+          <p>3. Estou ciente das normas de segurança, em especial a NR-06 e a NR-01, e de que o uso dos EPIs é obrigatório.</p>
+          <p>4. Comprometo-me a devolver os EPIs quando solicitado ou no desligamento da empresa.</p>
+          <p>5. Autorizo o desconto em folha do valor correspondente em caso de extravio, dano ou uso inadequado por minha responsabilidade.</p>
+        </section>
+        <div className="ficha-ack">
+          {termo ? <img className="ficha-sign-img ficha-sign-lg" src={termo.image} alt="Assinatura do empregado" /> : <i className="ficha-sign-line" />}
+          <small>Assinatura do empregado</small>
+        </div>
+        {canWrite && (
+          <div className="no-print">
+            {signing?.kind === 'termo' ? (
+              <div className="sign-box">
+                <p>Peça ao colaborador para assinar o termo com o dedo ou anexe uma foto da assinatura.</p>
+                <SignaturePad busy={busy} onCancel={() => setSigning(null)} onSave={saveSignature} />
+              </div>
+            ) : (
+              <button className="small-action" type="button" onClick={() => setSigning({ kind: 'termo' })}>
+                <PenLine size={14} /> {termo ? 'Refazer assinatura do termo' : 'Coletar assinatura do termo'}
+              </button>
+            )}
+          </div>
+        )}
+        <div className="ficha-table-wrap">
+          <table className="ficha-table">
+            <colgroup>
+              <col className="col-desc" />
+              <col className="col-fab" />
+              <col className="col-ca" />
+              <col className="col-dt" />
+              <col className="col-qtd" />
+              <col className="col-visto" />
+              <col className="col-dt" />
+              <col className="col-qtd" />
+              <col className="col-visto" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th rowSpan={2}>Descrição do material</th>
+                <th rowSpan={2}>Fabricante</th>
+                <th rowSpan={2}>C.A</th>
+                <th colSpan={3}>Entrega</th>
+                <th colSpan={3}>Devolução</th>
+              </tr>
+              <tr>
+                <th>Data da entrega</th>
+                <th>Qt.</th>
+                <th>Visto do empregado</th>
+                <th>Data da devolução</th>
+                <th>Qt.</th>
+                <th>Visto do empregado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {lines.length === 0 ? (
+                <tr><td colSpan={9}>Nenhuma entrega registrada nesta ficha.</td></tr>
+              ) : lines.map((item) => (
+                <tr key={item.id}>
+                  <td className="ficha-desc">{item.epi}</td>
+                  <td>{item.brand}</td>
+                  <td>{item.ca}</td>
+                  <td>{formatDate(item.deliveredAt)}</td>
+                  <td>{item.quantity}</td>
+                  <FichaVisto signed={visto('linha', item.id)} canWrite={canWrite} label="Visto da entrega" onSign={() => setSigning({ kind: 'linha', movementId: item.id })} />
+                  <td>{item.dischargedAt ? formatDate(item.dischargedAt) : ''}</td>
+                  <td>{item.returnedQuantity ? item.returnedQuantity : ''}</td>
+                  {item.returnedQuantity ? (
+                    <FichaVisto signed={visto('devolucao', item.id)} canWrite={canWrite} label="Visto da devolução" onSign={() => setSigning({ kind: 'devolucao', movementId: item.id })} />
+                  ) : (
+                    <td className="ficha-sign-cell"><i className="ficha-sign-line" /></td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {canWrite && signing && signing.kind !== 'termo' && (
+          <div className="sign-box no-print">
+            <p>{signing.kind === 'devolucao' ? 'Peça o visto da devolução ou anexe uma foto.' : 'Peça o visto do recebimento deste EPI ou anexe uma foto.'}</p>
+            <SignaturePad busy={busy} onCancel={() => setSigning(null)} onSave={saveSignature} />
+          </div>
+        )}
+      </article>
+    </Modal>
   );
 }
 
@@ -805,22 +1037,34 @@ function Movements({ movements, canWrite, epis, employees, onChange, onToast }: 
   );
 }
 
-function MovementForm({ title, epis, employees, initial, onClose, onSaved }: { title: string; epis: Epi[]; employees: Employee[]; initial: { type: MovementType; epiId?: string }; onClose: () => void; onSaved: () => Promise<void> }) {
+function MovementForm({ title, epis, employees, initial, onClose, onSaved }: { title: string; epis: Epi[]; employees: Employee[]; initial: { type: MovementType; epiId?: string; employeeId?: string }; onClose: () => void; onSaved: () => Promise<void> }) {
   const [type, setType] = useState<MovementType>(initial.type);
-  const [epiId, setEpiId] = useState(initial.epiId ?? epis[0]?.id ?? '');
-  const [employeeId, setEmployeeId] = useState(employees.find((item) => item.status === 'Ativo')?.id ?? '');
-  const [quantity, setQuantity] = useState(1);
+  const [lines, setLines] = useState(() => [{ key: 1, epiId: initial.epiId ?? epis[0]?.id ?? '', quantity: 1 }]);
+  const [employeeId, setEmployeeId] = useState(initial.employeeId ?? employees.find((item) => item.status === 'Ativo')?.id ?? '');
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const needsEmployee = type === 'Entrega' || type === 'Devolução';
+  const selected = new Set(lines.map((line) => line.epiId).filter(Boolean));
+  const unused = epis.filter((epi) => !selected.has(epi.id));
+
+  const addLine = () => {
+    const next = unused[0];
+    if (!next) return;
+    setLines((current) => [...current, { key: Date.now(), epiId: next.id, quantity: 1 }]);
+  };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setBusy(true);
     setError('');
     try {
-      await api.movements.create({ type, epiId, employeeId: needsEmployee ? employeeId : null, quantity, note });
+      await api.movements.create({
+        type,
+        employeeId: needsEmployee ? employeeId : null,
+        note,
+        items: lines.map((line) => ({ epiId: line.epiId, quantity: line.quantity })),
+      });
       await onSaved();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Não foi possível registrar.');
@@ -842,11 +1086,6 @@ function MovementForm({ title, epis, employees, initial, onClose, onSaved }: { t
             <option>Ajuste</option>
           </select>
         </label>
-        <label>EPI
-          <select value={epiId} onChange={(event) => setEpiId(event.target.value)} required>
-            {epis.map((epi) => <option key={epi.id} value={epi.id}>{epi.name} · {epi.available} disp.</option>)}
-          </select>
-        </label>
         {needsEmployee && (
           <label>Colaborador
             <select value={employeeId} onChange={(event) => setEmployeeId(event.target.value)} required>
@@ -856,12 +1095,42 @@ function MovementForm({ title, epis, employees, initial, onClose, onSaved }: { t
             </select>
           </label>
         )}
-        <label>Quantidade<input type="number" value={quantity} onChange={(event) => setQuantity(Number(event.target.value))} required /></label>
+        <div className="movement-items">
+          <div className="movement-items-head">
+            <span>EPIs</span>
+            <button className="text-button" type="button" onClick={addLine} disabled={!unused.length}>
+              <Plus size={14} /> Adicionar EPI
+            </button>
+          </div>
+          {lines.map((line, index) => (
+            <div className="movement-line" key={line.key}>
+              <label>Equipamento
+                <select
+                  value={line.epiId}
+                  onChange={(event) => setLines((current) => current.map((item) => item.key === line.key ? { ...item, epiId: event.target.value } : item))}
+                  required
+                >
+                  {epis.filter((epi) => epi.id === line.epiId || !selected.has(epi.id)).map((epi) => (
+                    <option key={epi.id} value={epi.id}>{epi.name} · {epi.available} disp.</option>
+                  ))}
+                </select>
+              </label>
+              <label>Qtd.
+                <input type="number" value={line.quantity} onChange={(event) => setLines((current) => current.map((item) => item.key === line.key ? { ...item, quantity: Number(event.target.value) } : item))} required />
+              </label>
+              {lines.length > 1 && (
+                <button className="icon-button" type="button" aria-label={`Remover ${index + 1}`} onClick={() => setLines((current) => current.filter((item) => item.key !== line.key))}>
+                  <Trash2 size={16} />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
         <label>Observação<input value={note} onChange={(event) => setNote(event.target.value)} placeholder="Opcional" /></label>
         {error && <p className="form-error">{error}</p>}
         <div className="form-actions">
           <button type="button" className="outline-button" onClick={onClose}>Cancelar</button>
-          <button className="primary-button" disabled={busy || !epiId || (needsEmployee && !employeeId)}>{busy ? 'Registrando...' : 'Confirmar'}</button>
+          <button className="primary-button" disabled={busy || !lines.length || lines.some((line) => !line.epiId) || (needsEmployee && !employeeId)}>{busy ? 'Registrando...' : lines.length > 1 ? `Confirmar ${lines.length} EPIs` : 'Confirmar'}</button>
         </div>
       </form>
     </Modal>
@@ -954,7 +1223,7 @@ function Reports({ epis, employees, movements }: { epis: Epi[]; employees: Emplo
     { title: 'Relatório de devoluções', run: () => downloadCsv('devolucoes.csv', ['Data', 'EPI', 'Qtd', 'Colaborador', 'Obs'], movements.filter((item) => item.type === 'Devolução').map((item) => [formatDateTime(item.date), item.epi, item.quantity, item.person, item.note])) },
     { title: 'Relatório de perdas', run: () => downloadCsv('perdas.csv', ['Data', 'EPI', 'Qtd', 'Responsável', 'Obs'], movements.filter((item) => item.type === 'Perda' || item.type === 'Quebra').map((item) => [formatDateTime(item.date), item.epi, item.quantity, item.person, item.note])) },
     { title: 'Relatório de estoque', run: () => downloadCsv('estoque.csv', ['EPI', 'Categoria', 'CA', 'Disponível', 'Em uso', 'Perdidos', 'Quebrados', 'Mínimo'], epis.map((item) => [item.name, item.category, item.ca, item.available, item.inUse, item.lost, item.broken, item.minimum])) },
-    { title: 'Por funcionário', run: () => downloadCsv('colaboradores.csv', ['Nome', 'Matrícula', 'Cargo', 'Setor', 'Status', 'Admissão'], employees.map((item) => [item.name, item.registration, item.role, item.sector, item.status, formatDate(item.admission)])) },
+    { title: 'Por funcionário', run: () => downloadCsv('colaboradores.csv', ['Nome', 'Matrícula', 'Cargo', 'Setor', 'Status', 'Admissão', 'EPIs em posse'], employees.map((item) => [item.name, item.registration, item.role, item.sector, item.status, formatDate(item.admission), employeeHoldings(item.id, movements, epis).reduce((sum, holding) => sum + holding.quantity, 0)])) },
     { title: 'Relatório de inventário', run: () => downloadCsv('movimentacoes.csv', ['Tipo', 'EPI', 'Qtd', 'Pessoa', 'Data', 'Obs'], movements.map((item) => [item.type, item.epi, item.quantity, item.person, formatDateTime(item.date), item.note])) },
   ];
 

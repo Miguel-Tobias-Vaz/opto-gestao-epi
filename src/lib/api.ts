@@ -101,6 +101,8 @@ export const api = {
     list: () => request<import('@/types').Employee[]>('/employees'),
     create: (body: object) => request<import('@/types').Employee>('/employees', { method: 'POST', body: JSON.stringify(body) }),
     update: (id: string, body: object) => request<import('@/types').Employee>(`/employees/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    signatures: (id: string) => request<import('@/types').EmployeeSignature[]>(`/employees/${id}/signatures`),
+    sign: (id: string, body: object) => request<import('@/types').EmployeeSignature>(`/employees/${id}/signatures`, { method: 'POST', body: JSON.stringify(body) }),
   },
   epis: {
     list: () => request<import('@/types').Epi[]>('/epis'),
@@ -109,7 +111,7 @@ export const api = {
   },
   movements: {
     list: () => request<import('@/types').Movement[]>('/movements'),
-    create: (body: object) => request<import('@/types').Movement>('/movements', { method: 'POST', body: JSON.stringify(body) }),
+    create: (body: object) => request<{ movements: import('@/types').Movement[] }>('/movements', { method: 'POST', body: JSON.stringify(body) }),
   },
   dashboard: () => request<import('@/types').DashboardData>('/dashboard'),
   inventory: {

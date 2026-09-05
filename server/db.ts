@@ -72,7 +72,7 @@ export function mapEpi(row: EpiRow) {
   };
 }
 
-export function mapMovement(row: MovementRow) {
+export function mapMovement(row: MovementRow, deliveredBy = '') {
   return {
     id: row.id,
     type: row.type,
@@ -80,6 +80,8 @@ export function mapMovement(row: MovementRow) {
     epi: row.epi_name,
     employeeId: row.employee_id,
     person: row.person_name,
+    userId: row.user_id,
+    deliveredBy,
     quantity: row.quantity,
     date: row.created_at,
     note: row.note,

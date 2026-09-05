@@ -41,7 +41,7 @@ export function createApp(options: { serveStatic?: boolean } = {}) {
       exposedHeaders: ['X-Access-Token'],
     }),
   );
-  app.use(express.json({ limit: '32kb' }));
+  app.use(express.json({ limit: '256kb' }));
   app.use(cookieParser());
   app.use('/api', router);
   app.use(handleError);

@@ -47,6 +47,8 @@ export interface Movement {
   epi: string;
   employeeId: string | null;
   person: string;
+  userId: string | null;
+  deliveredBy: string;
   quantity: number;
   date: string;
   note: string;
@@ -68,6 +70,15 @@ export interface InventorySession {
   createdAt: string;
   closedAt: string | null;
   items: InventoryItem[];
+}
+
+export interface EmployeeSignature {
+  id: string;
+  employeeId: string;
+  movementId: string | null;
+  kind: 'termo' | 'linha' | 'devolucao';
+  image: string;
+  signedAt: string;
 }
 
 export interface DashboardData {

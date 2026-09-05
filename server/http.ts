@@ -99,14 +99,36 @@ export const epiSchema = z.object({
 
 export const epiPatchSchema = epiSchema.partial();
 
-export const movementSchema = z.object({
-  type: z.enum(MOVEMENT_TYPES),
-  epiId: z.string().min(1),
-  employeeId: z.union([z.string().min(1), z.null()]).optional(),
+const movementLineSchema = z.object({
+  epiId: z.string().min(1, 'Selecione o EPI.'),
   quantity: z.number().int().min(-100_000).max(100_000),
-  note: z.string().trim().max(280, 'Observação é longa demais.').optional().default(''),
 });
+
+export const movementSchema = z
+  .object({
+    type: z.enum(MOVEMENT_TYPES),
+    employeeId: z.union([z.string().min(1), z.null()]).optional(),
+    note: z.string().trim().max(280, 'Observação é longa demais.').optional().default(''),
+    epiId: z.string().min(1).optional(),
+    quantity: z.number().int().min(-100_000).max(100_000).optional(),
+    items: z.array(movementLineSchema).min(1).max(40).optional(),
+  })
+  .transform((value) => {
+    const items = value.items?.length
+      ? value.items
+      : value.epiId != null && value.quantity != null
+        ? [{ epiId: value.epiId, quantity: value.quantity }]
+        : [];
+    return { type: value.type, employeeId: value.employeeId, note: value.note, items };
+  })
+  .refine((value) => value.items.length > 0, { message: 'Selecione pelo menos um EPI.' });
 
 export const inventoryCountSchema = z.object({
   found: z.number().int().min(0).max(1_000_000),
+});
+
+export const signatureSchema = z.object({
+  kind: z.enum(['termo', 'linha', 'devolucao']),
+  movementId: z.string().uuid().optional().nullable(),
+  image: z.string().min(40, 'Assinatura vazia.').max(200_000, 'Assinatura grande demais. Assine de novo, com um traço mais simples.'),
 });

@@ -71,6 +71,27 @@ create table if not exists public.inventory_items (
   difference integer not null default 0
 );
 
+create table if not exists public.employee_signatures (
+  id uuid primary key default gen_random_uuid(),
+  employee_id uuid not null references public.employees(id) on delete cascade,
+  movement_id uuid references public.movements(id) on delete cascade,
+  kind text not null check (kind in ('termo', 'linha', 'devolucao')),
+  image text not null,
+  signed_at timestamptz not null default now()
+);
+
+create unique index if not exists employee_signatures_termo_uidx
+  on public.employee_signatures (employee_id)
+  where kind = 'termo';
+
+create unique index if not exists employee_signatures_linha_uidx
+  on public.employee_signatures (employee_id, movement_id)
+  where kind = 'linha' and movement_id is not null;
+
+create unique index if not exists employee_signatures_devolucao_uidx
+  on public.employee_signatures (employee_id, movement_id)
+  where kind = 'devolucao' and movement_id is not null;
+
 create index if not exists idx_movements_created on public.movements (created_at desc);
 create index if not exists idx_movements_type on public.movements (type);
 create index if not exists idx_employees_name on public.employees (name);
@@ -81,3 +102,4 @@ alter table public.epis enable row level security;
 alter table public.movements enable row level security;
 alter table public.inventory_sessions enable row level security;
 alter table public.inventory_items enable row level security;
+alter table public.employee_signatures enable row level security;

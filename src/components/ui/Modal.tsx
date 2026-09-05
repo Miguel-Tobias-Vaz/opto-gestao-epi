@@ -1,11 +1,11 @@
 import type { ReactNode } from 'react';
 import { X } from 'lucide-react';
 
-export function Modal({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
+export function Modal({ title, children, onClose, wide }: { title: string; children: ReactNode; onClose: () => void; wide?: boolean }) {
   return (
     <div className="modal-scrim" onClick={onClose} role="presentation">
-      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" onClick={(event) => event.stopPropagation()}>
-        <div className="modal-head">
+      <div className={`modal${wide ? ' modal-wide' : ''}`} role="dialog" aria-modal="true" aria-labelledby="modal-title" onClick={(event) => event.stopPropagation()}>
+        <div className="modal-head no-print">
           <h2 id="modal-title">{title}</h2>
           <button className="icon-button" type="button" onClick={onClose} aria-label="Fechar">
             <X size={18} />
