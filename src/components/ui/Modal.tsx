@@ -36,7 +36,7 @@ export function Table({ headers, rows }: { headers: string[]; rows: ReactNode[][
           {rows.map((row, index) => (
             <tr key={index}>
               {row.map((cell, cellIndex) => (
-                <td key={cellIndex}>{cell}</td>
+                <td key={cellIndex} data-label={headers[cellIndex] || undefined}>{cell}</td>
               ))}
             </tr>
           ))}

@@ -151,7 +151,7 @@ function Login({ onEnter }: { onEnter: (user: AuthUser) => void }) {
           <>
             <label>
               E-mail
-              <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" required />
+              <input type="email" inputMode="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" required />
             </label>
             <label>
               Senha
@@ -170,7 +170,7 @@ function Login({ onEnter }: { onEnter: (user: AuthUser) => void }) {
             <p className="login-help">Informe o e-mail da conta. Enviaremos um link para redefinir a senha.</p>
             <label>
               E-mail
-              <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" required />
+              <input type="email" inputMode="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" required />
             </label>
             <button className="primary-button" type="submit" disabled={busy}>
               {busy ? 'Enviando...' : 'Enviar link'}
@@ -216,6 +216,7 @@ export default function App() {
   const [toast, setToast] = useState('');
   const [delivery, setDelivery] = useState<Epi | null>(null);
   const [notesOpen, setNotesOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [legal, setLegal] = useState<'privacidade' | 'termos' | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -254,12 +255,27 @@ export default function App() {
     const onKey = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
-        searchRef.current?.focus();
+        setSearchOpen(true);
+        window.setTimeout(() => searchRef.current?.focus(), 0);
+      }
+      if (event.key === 'Escape') {
+        setSearchOpen(false);
+        setNotesOpen(false);
+        setMobileOpen(false);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+
+  useEffect(() => {
+    document.body.classList.toggle('nav-open', mobileOpen);
+    return () => document.body.classList.remove('nav-open');
+  }, [mobileOpen]);
+
+  useEffect(() => {
+    if (searchOpen) window.setTimeout(() => searchRef.current?.focus(), 0);
+  }, [searchOpen]);
 
   const filteredEpis = useMemo(
     () => epis.filter((item) => `${item.name} ${item.ca} ${item.category} ${item.brand}`.toLowerCase().includes(query.toLowerCase())),
@@ -293,41 +309,67 @@ export default function App() {
         <div className="sidebar-top">
           <div className="brand">
             <div className="brand-mark"><ShieldCheck size={21} /></div>
-            {!collapsed && <div><strong>EPI Control</strong><small>gestão operacional</small></div>}
+            {(!collapsed || mobileOpen) && <div><strong>EPI Control</strong><small>gestão operacional</small></div>}
           </div>
           <button className="icon-button sidebar-toggle" onClick={() => setCollapsed(!collapsed)} aria-label="Recolher menu">
             {collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+          </button>
+          <button className="icon-button sidebar-close" onClick={() => setMobileOpen(false)} aria-label="Fechar menu">
+            <X size={18} />
           </button>
         </div>
         <nav>
           {nav.filter((item) => !item.roles || item.roles.includes(user.role)).map(({ label, icon: Icon }) => (
             <button key={label} className={page === label ? 'nav-item active' : 'nav-item'} onClick={() => openPage(label)} title={collapsed ? label : undefined}>
               <Icon size={18} />
-              {!collapsed && <span>{label}</span>}
+              {(!collapsed || mobileOpen) && <span>{label}</span>}
             </button>
           ))}
         </nav>
         <div className="sidebar-bottom">
           <div className="user-chip">
             <div className="avatar">{user.initials}</div>
-            {!collapsed && <div><strong>{user.name}</strong><small>{roleLabel(user.role)}</small></div>}
+            {(!collapsed || mobileOpen) && <div><strong>{user.name}</strong><small>{roleLabel(user.role)}</small></div>}
           </div>
-          <button className="nav-item" onClick={logout}><ArrowUpFromLine size={18} />{!collapsed && <span>Sair</span>}</button>
+          <button className="nav-item" onClick={logout}><ArrowUpFromLine size={18} />{(!collapsed || mobileOpen) && <span>Sair</span>}</button>
         </div>
       </aside>
 
       <div className="main-area">
-        <header>
-          <button className="mobile-menu icon-button" onClick={() => setMobileOpen(true)}><Menu size={20} /></button>
-          <div>
+        <header className={searchOpen ? 'header-searching' : undefined}>
+          <button className="mobile-menu icon-button" onClick={() => setMobileOpen(true)} aria-label="Abrir menu"><Menu size={20} /></button>
+          <div className="header-title">
             <p className="eyebrow">{todayLabel()}</p>
             <h1>{page}</h1>
           </div>
           <div className="header-actions">
-            <label className="search">
-              <Search size={17} />
+            <label className={`search ${searchOpen ? 'search-open' : ''}`}>
+              <button
+                className="search-toggle"
+                type="button"
+                aria-label="Buscar"
+                onClick={() => {
+                  setNotesOpen(false);
+                  setSearchOpen(true);
+                }}
+              >
+                <Search size={17} />
+              </button>
               <input ref={searchRef} placeholder="Buscar no sistema..." value={query} onChange={(event) => setQuery(event.target.value)} />
               <kbd>Ctrl K</kbd>
+              {searchOpen && (
+                <button
+                  className="search-clear"
+                  type="button"
+                  aria-label="Fechar busca"
+                  onClick={() => {
+                    setSearchOpen(false);
+                    setQuery('');
+                  }}
+                >
+                  <X size={16} />
+                </button>
+              )}
             </label>
             <div className="notes-wrap">
               <button className="icon-button notification" type="button" aria-label="Notificações" onClick={() => setNotesOpen((open) => !open)}>
